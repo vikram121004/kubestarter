@@ -1,0 +1,101 @@
+# azure-pipelines.yml
+
+trigger:
+  - main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  imageRepository: 'my-app'
+  dockerRegistryServiceConnection: 'MyAzureACR'
+  aksServiceConnection: 'Azure-aks-service-connection'
+  helmChartPath: 'app/helm'
+  helmReleaseName: 'my-app-release'
+  namespace: 'default'
+
+stages:
+
+# =========================================================
+# Stage 1: Build and Publish
+# =========================================================
+
+- stage: BuildAndPublish
+  displayName: Build and Publish Artifacts
+
+  jobs:
+  - job: BuildJob
+    displayName: Build Container and Helm Chart
+
+    steps:
+
+    # Build and Push Docker Image
+    - task: Docker@2
+      displayName: Build and Push Docker Image
+
+      inputs:
+        containerRegistry: '$(dockerRegistryServiceConnection)'
+        repository: '$(imageRepository)'
+        command: 'buildAndPush'
+        Dockerfile: 'app/Dockerfile'
+
+        tags: |
+          $(Build.BuildId)
+          latest
+
+    # Install Helm
+    - task: HelmInstaller@1
+      displayName: Install Helm
+
+      inputs:
+        helmVersionToInstall: '3.11.0'
+
+
+# =========================================================
+# Stage 2: Deploy to AKS
+# =========================================================
+
+- stage: Deploy
+  displayName: Deploy to AKS
+
+  dependsOn: BuildAndPublish
+  condition: succeeded()
+
+  jobs:
+
+  - deployment: DeployToAKS
+    displayName: Deploy Application to AKS
+
+    environment: 'AKS-Environment'
+
+    strategy:
+      runOnce:
+
+        deploy:
+
+          steps:
+
+          # Helm Upgrade / Install
+          - task: HelmDeploy@0
+            displayName: Deploy Helm Chart to AKS
+
+            inputs:
+              connectionType: 'Azure Resource Manager'
+              azureSubscription: '$(aksServiceConnection)'
+              azureResourceGroup: 'MyResourceGroup'
+              kubernetesCluster: 'MyAKSCluster'
+
+              namespace: '$(namespace)'
+
+              command: 'upgrade'
+              chartType: 'FilePath'
+
+              chartPath: '$(helmChartPath)'
+
+              releaseName: '$(helmReleaseName)'
+
+              install: true
+
+              arguments: >
+                --set image.repository=$(imageRepository)
+                --set image.tag=$(Build.BuildId)
